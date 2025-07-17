@@ -26,7 +26,7 @@ impl CounterFuture {
 
             thread::spawn(move || {
                 // Each thread sleeps for the same duration, so that we intentionally introduce a race condition
-                // and ensure that the task is woken up by multiple threads
+                // and ensure that multiple threads try to wake up the task
                 thread::sleep(Duration::from_millis(10));
 
                 // Atomically increase the counter without using a Mutex<T>
