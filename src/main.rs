@@ -1,0 +1,68 @@
+use std::{
+    pin::Pin,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU32, Ordering},
+    },
+    task::{Context, Poll, Waker},
+    thread,
+    time::Duration,
+};
+
+struct CounterFuture {
+    waker: Arc<Mutex<Option<Waker>>>,
+    poll_count: Arc<AtomicU32>,
+}
+
+impl CounterFuture {
+    fn new() -> Self {
+        let waker: Arc<Mutex<Option<Waker>>> = Default::default();
+        let poll_count = Arc::new(AtomicU32::new(0));
+
+        // Start a thread that sleeps, then increases poll_count, then tries to wake up the task
+        for _ in 0..10 {
+            let thread_waker = waker.clone();
+            let poll_count = poll_count.clone();
+
+            thread::spawn(move || {
+                // Each thread sleeps for the same duration, so that we intentionally introduce a race condition
+                // and ensure that the task is woken up by multiple threads
+                thread::sleep(Duration::from_millis(10));
+
+                // Atomically increase the counter without using a Mutex<T>
+                poll_count.fetch_add(1, Ordering::SeqCst);
+
+                // Not each thread will get Some because they are competing for the waker
+                if let Some(waker) = thread_waker.lock().unwrap().take() {
+                    println!("Waker: {waker:?}");
+                    waker.wake();
+                }
+            });
+        }
+        Self { waker, poll_count }
+    }
+}
+
+impl Future for CounterFuture {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut waker = self.waker.lock().unwrap();
+        let count = self.poll_count.load(Ordering::Relaxed);
+        println!("Poll count from poll(): {}", count);
+        if count == 10 {
+            Poll::Ready(())
+        } else {
+            *waker = Some(cx.waker().clone());
+            Poll::Pending
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    for _ in 0..10 {
+        CounterFuture::new().await;
+    }
+    println!("Done awaiting futures.");
+}
